@@ -23,6 +23,6 @@
     // Set after creating the Access application (see README). Empty = every request is rejected.
     "TEAM_DOMAIN": "still-union-a95e.cloudflareaccess.com",
     "POLICY_AUD": "2b0d1e7080ec7ca5fc67d7440a4b69010f313f83f2c241d1f1516686ff99be59",
-    "ALLOWED_EMAILS": "mark@marklynch.dev"
+    "ALLOWED_EMAILS": "mark@marklynch.dev,phil@upvalue.io"
   }
 }
