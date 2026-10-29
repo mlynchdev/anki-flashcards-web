@@ -206,6 +206,7 @@ describe('Access JWT verification', () => {
     const now = Date.now();
     const allowed = parseEmailList(' mark@marklynch.dev , Friend@Other.org ,');
     expect(allowed).toEqual(['mark@marklynch.dev', 'friend@other.org']);
+    expect(parseEmailList('mark@marklynch.dev,phil@upvalue.io')).toEqual(['mark@marklynch.dev', 'phil@upvalue.io']);
     const multi = { ...cfg, allowedEmails: allowed };
     await expect(verifyAccessJwt(await sign({ ...good(now), email: 'friend@other.org' }), multi, { fetcher, now })).resolves.toEqual({
       email: 'friend@other.org',
