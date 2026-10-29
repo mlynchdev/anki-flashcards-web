@@ -1,0 +1,13 @@
+# Course-derived card content: kept local, never published
+anki.db
+*.db
+*.db-journal
+cards/
+
+# Tooling
+node_modules/
+dist/
+.wrangler/
+.dev.vars
+.env*
+.DS_Store
