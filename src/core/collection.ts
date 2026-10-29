@@ -108,6 +108,14 @@ export class Collection {
   undoStack: UndoEntry[] = [];
   private lastId = 0;
   version = 0;
+  /** Local changes not yet pushed to the sync server: `${store}:${id}` -> change time. */
+  syncJournal = new Map<string, number>();
+  syncState: { clientId: string; cursor: number } = { clientId: '', cursor: 0 };
+  /** Local-only key/value data (not synced), e.g. the loaded content version. */
+  localMeta: Record<string, unknown> = {};
+  private applyingRemote = false;
+  /** When set, journal entries get this timestamp instead of the current time. */
+  private journalAt: number | undefined;
   /** Overridable clock for tests. */
   clock: () => number = () => Date.now();
 
@@ -132,6 +140,11 @@ export class Collection {
     const meta = all.meta as { key: string; value: unknown }[];
     const s = meta.find((m) => m.key === 'settings');
     this.settings = { ...CLONE(DEFAULT_SETTINGS), ...((s?.value as Partial<Settings>) ?? {}) };
+    const journal = meta.find((m) => m.key === 'syncJournal')?.value as [string, number][] | undefined;
+    this.syncJournal = new Map(journal ?? []);
+    const st = meta.find((m) => m.key === 'syncState')?.value as Collection['syncState'] | undefined;
+    this.syncState = st?.clientId ? st : { clientId: randomGuid().replace(/[^a-zA-Z0-9]/g, 'x'), cursor: 0 };
+    this.localMeta = (meta.find((m) => m.key === 'local')?.value as Record<string, unknown>) ?? {};
     const mediaNames = (this.persistence as { mediaNames?: () => Promise<string[]> }).mediaNames;
     if (mediaNames) this.mediaNames = new Set(await mediaNames.call(this.persistence));
     this.reindex();
@@ -141,6 +154,15 @@ export class Collection {
   }
 
   private ensureDefaults() {
+    this.journalAt = 1;
+    try {
+      this.ensureDefaultsInner();
+    } finally {
+      this.journalAt = undefined;
+    }
+  }
+
+  private ensureDefaultsInner() {
     const now = this.clock();
     for (const nt of builtinNotetypes(now)) if (!this.notetypes.has(nt.id)) this.put('notetypes', nt);
     if (!this.configs.has(DEFAULT_CONFIG_ID)) {
@@ -220,9 +242,23 @@ export class Collection {
     const prev = map.get(value.id);
     map.set(value.id, value);
     if (store === 'cards') this.onCardChanged(prev as Card | undefined, value as unknown as Card);
-    if (store === 'revlog') this.onRevlogChanged(undefined, value as unknown as Revlog);
+    if (store === 'revlog') this.onRevlogChanged(prev as Revlog | undefined, value as unknown as Revlog);
     this.queuePut(store, value.id, value);
+    this.journal(store, value.id);
   }
+
+  private journal(store: string, id: number | string) {
+    if (this.applyingRemote) return;
+    const key = `${store}:${id}`;
+    if (this.journalAt !== undefined) {
+      // Low-priority write (defaults, shared content): any server copy wins.
+      if (!this.syncJournal.has(key)) this.syncJournal.set(key, this.journalAt);
+    } else {
+      this.syncJournal.set(key, Math.max(this.clock(), (this.syncJournal.get(key) ?? 0) + 1));
+    }
+    this.journalDirty = true;
+  }
+  private journalDirty = false;
 
   private remove(store: StoreName, id: number) {
     this.record(store, id);
@@ -236,6 +272,7 @@ export class Collection {
     if (!this.dels.has(store)) this.dels.set(store, new Set());
     this.dels.get(store)!.add(id);
     this.scheduleFlush();
+    this.journal(store, id);
   }
 
   private queuePut(store: StoreName, key: IDBValidKey, value: unknown) {
@@ -288,6 +325,12 @@ export class Collection {
   async flush(): Promise<void> {
     if (this.flushTimer) clearTimeout(this.flushTimer);
     this.flushTimer = null;
+    if (this.journalDirty) {
+      this.journalDirty = false;
+      this.queuePut('meta', 'syncJournal', { key: 'syncJournal', value: [...this.syncJournal] });
+      if (this.flushTimer) clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
     const puts = this.puts;
     const dels = this.dels;
     this.puts = new Map();
@@ -334,7 +377,72 @@ export class Collection {
   saveSettings(patch: Partial<Settings>) {
     this.settings = { ...this.settings, ...patch };
     this.queuePut('meta', 'settings', { key: 'settings', value: this.settings });
+    this.journal('settings', 'settings');
     this.emit();
+  }
+
+  saveSyncState(patch: Partial<Collection['syncState']>) {
+    this.syncState = { ...this.syncState, ...patch };
+    this.queuePut('meta', 'syncState', { key: 'syncState', value: this.syncState });
+  }
+
+  saveLocalMeta(patch: Record<string, unknown>) {
+    this.localMeta = { ...this.localMeta, ...patch };
+    this.queuePut('meta', 'local', { key: 'local', value: this.localMeta });
+  }
+
+  /** Records for the pending journal entries, oldest first. */
+  pendingChanges(limit: number): { key: string; store: string; id: string; changedAt: number; data: unknown | null }[] {
+    const out = [];
+    const entries = [...this.syncJournal].sort((a, b) => a[1] - b[1]).slice(0, limit);
+    for (const [key, changedAt] of entries) {
+      const i = key.indexOf(':');
+      const store = key.slice(0, i);
+      const id = key.slice(i + 1);
+      let data: unknown | null;
+      if (store === 'settings') data = this.settings;
+      else data = this.mapFor(store as StoreName).get(Number(id)) ?? null;
+      out.push({ key, store, id, changedAt, data });
+    }
+    return out;
+  }
+
+  /** Drops journal entries that were pushed, unless they changed again since. */
+  markPushed(sent: { key: string; changedAt: number }[]) {
+    for (const s of sent) if (this.syncJournal.get(s.key) === s.changedAt) this.syncJournal.delete(s.key);
+    this.journalDirty = true;
+    this.scheduleFlush();
+  }
+
+  /** Applies records from the sync server. Local changes that are newer win. */
+  applyRemote(rows: { store: string; id: string; changedAt: number; data: unknown | null }[]): number {
+    let applied = 0;
+    this.applyingRemote = true;
+    try {
+      for (const r of rows) {
+        const local = this.syncJournal.get(`${r.store}:${r.id}`);
+        if (local !== undefined && local > r.changedAt) continue;
+        if (local !== undefined) this.syncJournal.delete(`${r.store}:${r.id}`);
+        if (r.store === 'settings') {
+          if (r.data) {
+            this.settings = { ...CLONE(DEFAULT_SETTINGS), ...(r.data as Partial<Settings>) };
+            this.queuePut('meta', 'settings', { key: 'settings', value: this.settings });
+          }
+        } else if (r.data === null) {
+          this.remove(r.store as StoreName, Number(r.id));
+        } else {
+          this.put(r.store as StoreName, r.data as { id: number });
+        }
+        applied++;
+      }
+    } finally {
+      this.applyingRemote = false;
+    }
+    if (applied) {
+      this.undoStack = [];
+      this.emit();
+    }
+    return applied;
   }
 
   // ---------- time ----------
@@ -1213,7 +1321,7 @@ export class Collection {
   // ---------- bulk import ----------
 
   /** Runs a bulk mutation without recording undo history. */
-  bulk<T>(label: string, fn: (api: BulkApi) => T): T {
+  bulk<T>(label: string, fn: (api: BulkApi) => T, opts: { lowPriority?: boolean } = {}): T {
     const api: BulkApi = {
       putCard: (c) => this.put('cards', c),
       putNote: (n) => this.put('notes', n),
@@ -1224,9 +1332,14 @@ export class Collection {
       removeCard: (id) => this.remove('cards', id),
       newId: () => this.newId(),
     };
-    const result = this.transact(label, () => fn(api), { undoable: false });
-    this.undoStack = [];
-    return result;
+    if (opts.lowPriority) this.journalAt = 1;
+    try {
+      const result = this.transact(label, () => fn(api), { undoable: false });
+      this.undoStack = [];
+      return result;
+    } finally {
+      this.journalAt = undefined;
+    }
   }
 
   noteByGuid(guid: string): Note | undefined {

@@ -4,9 +4,13 @@ An open-source spaced repetition app that runs entirely in the browser. It is mo
 AnkiMobile: hierarchical decks, the same study flow and rating buttons, Anki search syntax,
 FSRS scheduling. It installs as a PWA on iOS, Android and desktop and works offline.
 
-There is no server and no account. You import your own decks; cards and review history are
-stored in the browser's IndexedDB and never leave the device. No card content ships with the
-app.
+The app works offline from IndexedDB. Deployed on Cloudflare, it adds three things:
+- Deck content is served from a D1 database.
+- Your review history and scheduling state sync through a per-user Durable Object.
+- Cloudflare Access protects the whole Worker, so only you can sign in.
+
+Served from any static host it runs local-only, and you import your own files. No card content
+ships with the app or the repository.
 
 ## Features
 
@@ -104,19 +108,92 @@ dependency, used only to cross-check the FSRS port.
 ```
 src/core/       data model, FSRS + SM-2 scheduler, search parser, collection store, stats, optimizer
 src/importers/  apkg/colpkg, card store .db, CSV, JSON backup
+src/sync/       sync protocol and client
+worker/         Cloudflare Worker: Access JWT check, D1 content API, UserState Durable Object
 src/ui/         screens (Preact)
 tests/          unit tests
 ```
 
-## Deploy (Cloudflare Workers static assets)
+## Cloudflare deployment: D1, Durable Object sync, Access
 
-```bash
-npx wrangler login     # once
-npm run deploy         # build + wrangler deploy
+```
+browser (IndexedDB, works offline)
+   │  GET /api/content   ──► Worker ──► D1 "anki-content" (decks / sources / cards)
+   │  POST /api/sync     ──► Worker ──► Durable Object UserState, one per Access email (SQLite)
+   │  everything else    ──► Worker ──► static assets (dist/)
+   └─ every request first passes Cloudflare Access; the Worker re-verifies the Access JWT
 ```
 
-`wrangler.jsonc` serves `dist/` as static assets with single-page-app fallback. The app is fully
-static, so any static host works.
+### Worker (`worker/`)
+- `access.ts` verifies the `Cf-Access-Jwt-Assertion` header, or the `CF_Authorization` cookie,
+  as an RS256 JWT. Keys come from `https://<TEAM_DOMAIN>/cdn-cgi/access/certs`. It checks the
+  AUD tag, the issuer and the expiry. It also checks that the email is in `ALLOWED_EMAILS`.
+- `index.ts` runs before static assets (`run_worker_first`), so the UI is gated too. It fails
+  closed: if `TEAM_DOMAIN` or `POLICY_AUD` is empty, every request gets a 403. Preview URLs are
+  disabled.
+- `syncStore.ts` is the Durable Object's store, using SQLite storage. Each record is keyed by
+  `(store, id)` and carries the client's change time and a server sequence number.
+
+### Sync rules
+- The client journals every local change: cards, notes, decks, presets, note types, review log
+  and settings, each with a timestamp.
+- A sync pushes the journal, then pulls everything with a newer server sequence that another
+  client wrote.
+- Conflicts are last-write-wins per record, by change time. Review-log entries are immutable,
+  except that undo deletes them with a tombstone.
+- Defaults created by a fresh browser, and cards created from D1 content, are journaled with
+  timestamp 1. Any synced copy beats them, so opening the app on a new device never resets your
+  progress.
+- Content rows from D1 get deterministic deck, note and card ids, so every device agrees on
+  them.
+- Sync runs on start, 4 s after a change, every minute, when the browser comes back online and
+  when the tab becomes visible. Offline changes stay in IndexedDB until then.
+- Erasing local data (or clearing the browser) and reloading downloads everything again.
+- Media files are not synced.
+
+### One-time setup
+
+```bash
+npx wrangler login
+npx wrangler d1 create anki-content            # put the id in wrangler.jsonc
+npx wrangler d1 execute anki-content --remote --file=schema.sql
+npm run deploy                                 # deploys fail-closed (403 everywhere)
+```
+
+Load the card store into D1. The generated SQL contains card text: keep it outside the repo and
+delete it afterwards.
+
+```bash
+python3 scripts/anki-db-to-d1.py anki.db /tmp/anki-d1.sql
+npx wrangler d1 execute anki-content --remote --file=/tmp/anki-d1.sql -y
+rm /tmp/anki-d1.sql
+```
+
+Running the same commands later replaces the content. The script deletes the old rows first.
+Notes are matched by GUID, so scheduling survives content edits.
+
+Cloudflare Access (Zero Trust Free plan, up to 50 users):
+1. Open Zero Trust in the dashboard (one.dash.cloudflare.com) and create a team on the Free plan
+   if you don't have one. The team domain looks like `<team>.cloudflareaccess.com`.
+2. In Workers & Pages, open `anki-flashcards-web`, go to Settings → Domains & Routes, and enable
+   Cloudflare Access on the `workers.dev` route. This creates an Access application for the
+   Worker.
+3. In Zero Trust → Access → Applications, edit that application:
+   - Policy: Allow, with Include → Emails set to your address.
+   - Login methods: One-time PIN. To use GitHub, add it first under Settings → Authentication →
+     Login methods.
+4. Copy the application's AUD tag (Overview tab). Set `TEAM_DOMAIN` and `POLICY_AUD` in
+   `wrangler.jsonc`, then run `npm run deploy`.
+
+Check that unauthenticated requests are rejected:
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" https://anki-flashcards-web.<subdomain>.workers.dev/api/content   # 302 (Access) or 403 (Worker)
+```
+
+Local development of the Worker uses `wrangler dev` with a local D1 and Durable Object. Put
+`DEV_EMAIL=you@example.com` in `.dev.vars` (gitignored). That identity is honoured only for
+`localhost` requests.
 
 ## The local card store
 
@@ -127,7 +204,8 @@ app.
 
 ## Not implemented
 
-- Sync with AnkiWeb or between devices. Use backup and import to move data.
+- Sync with AnkiWeb. Between devices, the app syncs through its own Durable Object.
+- Syncing media files. Images and audio from `.apkg` imports stay in the browser that imported them.
 - Exporting `.apkg` packages. Export is JSON or tab-separated text.
 - Image occlusion, type-in-the-answer comparison, TTS, LaTeX/MathJax rendering, and card
   JavaScript (scripts are stripped for safety).

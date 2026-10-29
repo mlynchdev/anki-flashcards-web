@@ -3,6 +3,7 @@ import { registerSW } from 'virtual:pwa-register';
 import './styles.css';
 import { App } from './ui/App';
 import { applyTheme, col } from './ui/state';
+import { startServerSync } from './ui/sync';
 
 async function start() {
   const root = document.getElementById('app')!;
@@ -20,6 +21,7 @@ async function start() {
   });
   window.addEventListener('pagehide', () => void col.flush());
   if (navigator.storage?.persist) void navigator.storage.persist();
+  void startServerSync();
 }
 
 void start();

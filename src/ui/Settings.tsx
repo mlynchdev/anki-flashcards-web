@@ -1,6 +1,48 @@
 import { col, navigate, toast, useCol, applyTheme } from './state';
 import { NavBar, NumberRow, Row, SelectRow, SwitchRow, confirm } from './components';
 import type { GestureAction, Settings as S } from '../core/types';
+import { reloadServerContent, syncClient, useSyncStatus } from './sync';
+
+function SyncGroup() {
+  const st = useSyncStatus();
+  if (st.state === 'disabled') {
+    return (
+      <>
+        <div class="group-title">Sync</div>
+        <div class="group">
+          <Row sub="Served without the sync API (static hosting or local dev). Data lives only in this browser.">Local only</Row>
+        </div>
+      </>
+    );
+  }
+  const label: Record<string, string> = {
+    idle: 'Up to date',
+    syncing: 'Syncing…',
+    offline: 'Offline — changes are kept and sent later',
+    auth: 'Sign-in required',
+    error: 'Sync error',
+  };
+  return (
+    <>
+      <div class="group-title">Sync</div>
+      <div class="group">
+        <Row
+          sub={[st.email, st.lastSync ? `last sync ${new Date(st.lastSync).toLocaleTimeString()}` : '', st.message].filter(Boolean).join(' · ')}
+          value={col.syncJournal.size ? `${col.syncJournal.size} pending` : undefined}
+        >
+          {label[st.state]}
+        </Row>
+        <Row onClick={() => (st.state === 'auth' ? location.reload() : void syncClient.sync())}>
+          <span style="color:var(--accent)">{st.state === 'auth' ? 'Sign in again' : 'Sync now'}</span>
+        </Row>
+        <Row onClick={() => void reloadServerContent()}>
+          <span style="color:var(--accent)">Reload deck content from server</span>
+        </Row>
+      </div>
+      <p class="group-footer">Reviews, scheduling, flags, deck options and settings sync to your account. Card content comes from the server database.</p>
+    </>
+  );
+}
 
 const GESTURES: { label: string; value: GestureAction }[] = [
   { label: 'Nothing', value: 'none' },
@@ -37,6 +79,7 @@ export function SettingsScreen() {
     <div class="screen">
       <NavBar title="Settings" />
       <div class="content">
+        <SyncGroup />
         <div class="group-title">Appearance</div>
         <div class="group">
           <SelectRow
@@ -122,14 +165,19 @@ export function SettingsScreen() {
             class="row"
             style="color:var(--danger)"
             onClick={async () => {
-              if (!(await confirm('Delete everything?', 'All decks, cards, review history and media in this browser will be erased. Export a backup first if you want to keep them.', 'Erase', true))) return;
+              const synced = syncClient.status.state !== 'disabled';
+              const msg = synced
+                ? 'Local data in this browser will be erased. Synced data stays on the server and is downloaded again on next sync.'
+                : 'All decks, cards, review history and media in this browser will be erased. Export a backup first if you want to keep them.';
+              if (!(await confirm('Erase local data?', msg, 'Erase', true))) return;
               await col.wipe();
               applyTheme();
               toast('Collection erased');
               navigate('', true);
+              if (synced) location.reload();
             }}
           >
-            Erase collection
+            Erase local data
           </button>
         </div>
         <p class="center muted" style="font-size:13px">

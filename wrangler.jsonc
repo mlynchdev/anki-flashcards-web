@@ -1,9 +1,28 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "anki-flashcards-web",
+  "main": "worker/index.ts",
   "compatibility_date": "2026-10-01",
+  // The Worker runs first for every request so Access JWTs are checked for the UI too.
   "assets": {
     "directory": "./dist",
-    "not_found_handling": "single-page-application"
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": true
+  },
+  "workers_dev": true,
+  "preview_urls": false,
+  "d1_databases": [
+    { "binding": "DB", "database_name": "anki-content", "database_id": "0aa54a32-9d59-40db-9b24-cd19cca6594d" }
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "USER_STATE", "class_name": "UserState" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["UserState"] }],
+  "vars": {
+    // Set after creating the Access application (see README). Empty = every request is rejected.
+    "TEAM_DOMAIN": "",
+    "POLICY_AUD": "",
+    "ALLOWED_EMAILS": "mark@marklynch.dev"
   }
 }
