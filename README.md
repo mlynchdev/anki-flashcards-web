@@ -185,6 +185,23 @@ Cloudflare Access (Zero Trust Free plan, up to 50 users):
 4. Copy the application's AUD tag (Overview tab). Set `TEAM_DOMAIN` and `POLICY_AUD` in
    `wrangler.jsonc`, then run `npm run deploy`.
 
+### Giving someone else access
+
+The Worker only admits an email that both Cloudflare Access and `ALLOWED_EMAILS` allow. To add
+a second person, e.g. `friend@other.org`:
+
+1. In Zero Trust → Access → Applications, edit the application's policy. Under Include → Emails,
+   add their address. The One-time PIN login works for any email domain.
+2. In `wrangler.jsonc`, add the address to the comma-separated list, e.g.
+   `"ALLOWED_EMAILS": "mark@marklynch.dev, friend@other.org"`. Case and spaces don't matter.
+3. Run `npm run deploy`.
+
+Each email gets its own Durable Object, so review history and scheduling are kept separately
+per person. Deck content in D1 is shared.
+
+To remove someone, delete the address in both places and redeploy. Their Durable Object keeps
+its data until you delete it.
+
 Check that unauthenticated requests are rejected:
 
 ```bash

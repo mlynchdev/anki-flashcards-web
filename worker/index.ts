@@ -1,5 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
-import { AccessError, tokenFromRequest, verifyAccessJwt } from './access';
+import { AccessError, parseEmailList, tokenFromRequest, verifyAccessJwt } from './access';
 import { SyncStoreDb } from './syncStore';
 import type { SyncRequest, SyncResponse } from '../src/sync/protocol';
 
@@ -57,10 +57,7 @@ async function authenticate(req: Request, env: Env): Promise<{ email: string } |
     return await verifyAccessJwt(token, {
       teamDomain: env.TEAM_DOMAIN,
       aud: env.POLICY_AUD,
-      allowedEmails: (env.ALLOWED_EMAILS ?? '')
-        .split(',')
-        .map((e) => e.trim().toLowerCase())
-        .filter(Boolean),
+      allowedEmails: parseEmailList(env.ALLOWED_EMAILS),
     });
   } catch (e) {
     return { error: e instanceof AccessError ? `Access token rejected: ${e.message}` : 'Access token verification failed' };

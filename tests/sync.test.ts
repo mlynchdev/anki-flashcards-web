@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import initSqlJs from 'sql.js';
 import { SyncStoreDb, type Sql } from '../worker/syncStore';
-import { verifyAccessJwt, AccessError } from '../worker/access';
+import { verifyAccessJwt, AccessError, parseEmailList } from '../worker/access';
 import { Collection } from '../src/core/collection';
 import { MemoryPersistence } from '../src/core/db';
 import { NT_BASIC } from '../src/core/notetypes';
@@ -164,10 +164,11 @@ describe('Access JWT verification', () => {
       true,
       ['sign', 'verify'],
     )) as CryptoKeyPair;
-    const jwk = { ...(await crypto.subtle.exportKey('jwk', kp.publicKey)), kid: 'k1' };
+    const kid = crypto.randomUUID();
+    const jwk = { ...(await crypto.subtle.exportKey('jwk', kp.publicKey)), kid };
     const b64 = (b: Uint8Array | string) =>
       Buffer.from(typeof b === 'string' ? b : b).toString('base64').replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_');
-    const sign = async (claims: Record<string, unknown>, kid = 'k1') => {
+    const sign = async (claims: Record<string, unknown>) => {
       const h = b64(JSON.stringify({ alg: 'RS256', kid }));
       const p = b64(JSON.stringify(claims));
       const sig = new Uint8Array(await crypto.subtle.sign('RSASSA-PKCS1-v1_5', kp.privateKey, new TextEncoder().encode(`${h}.${p}`)));
@@ -198,5 +199,17 @@ describe('Access JWT verification', () => {
       'not.a.jwt',
     ];
     for (const t of bad) await expect(verifyAccessJwt(t, cfg, { fetcher, now })).rejects.toBeInstanceOf(AccessError);
+  });
+
+  it('allows every address in a comma-separated ALLOWED_EMAILS list', async () => {
+    const { sign, fetcher } = await signer();
+    const now = Date.now();
+    const allowed = parseEmailList(' mark@marklynch.dev , Friend@Other.org ,');
+    expect(allowed).toEqual(['mark@marklynch.dev', 'friend@other.org']);
+    const multi = { ...cfg, allowedEmails: allowed };
+    await expect(verifyAccessJwt(await sign({ ...good(now), email: 'friend@other.org' }), multi, { fetcher, now })).resolves.toEqual({
+      email: 'friend@other.org',
+    });
+    await expect(verifyAccessJwt(await sign({ ...good(now), email: 'third@x.com' }), multi, { fetcher, now })).rejects.toBeInstanceOf(AccessError);
   });
 });

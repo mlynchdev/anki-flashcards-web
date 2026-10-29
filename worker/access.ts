@@ -93,6 +93,14 @@ export async function verifyAccessJwt(
   return { email };
 }
 
+/** "a@x.com, B@y.org" -> ["a@x.com", "b@y.org"] */
+export function parseEmailList(raw: string | undefined): string[] {
+  return (raw ?? '')
+    .split(',')
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
+}
+
 export function tokenFromRequest(req: Request): string | null {
   const header = req.headers.get('Cf-Access-Jwt-Assertion');
   if (header) return header;
