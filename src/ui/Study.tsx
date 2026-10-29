@@ -16,8 +16,25 @@ const MAX_ANSWER_MS = 60_000;
 export function Study({ deckId }: { deckId: number }) {
   useCol();
   const session = useMemo<StudySession>(() => col.startSession(deckId), [deckId]);
-  const [next, setNext] = useState<NextCard>(() => col.nextCard(session));
-  const [showAnswer, setShowAnswer] = useState(false);
+  // Refs mirror the state so key presses arriving before a re-render see current values.
+  const nextRef = useRef<NextCard | null>(null);
+  if (!nextRef.current) nextRef.current = col.nextCard(session);
+  const showRef = useRef(false);
+  const [, bump] = useState(0);
+  const setNext = (n: NextCard) => {
+    nextRef.current = n;
+    bump((x) => x + 1);
+  };
+  const setShowAnswer = (v: boolean) => {
+    showRef.current = v;
+    bump((x) => x + 1);
+  };
+  const next = nextRef.current;
+  const showAnswer = showRef.current;
+  const cur = () => {
+    const n = nextRef.current;
+    return n?.kind === 'card' ? col.cards.get(n.card.id) ?? null : null;
+  };
   const [overlay, setOverlay] = useState<null | { kind: 'edit' | 'info'; card: Card }>(null);
   const shownAt = useRef(Date.now());
   const areaRef = useRef<HTMLDivElement>(null);
@@ -52,7 +69,9 @@ export function Study({ deckId }: { deckId: number }) {
   const counts = col.counts(deckId, session);
 
   const answer = (rating: Rating) => {
-    if (!card || !showAnswer) return;
+    const card = cur();
+    if (!card || !showRef.current) return;
+    const note = col.notes.get(card.noteId);
     col.answer(card.id, rating, Math.min(Date.now() - shownAt.current, MAX_ANSWER_MS), session);
     const leech = col.hasTag(card.noteId, 'leech') && !note?.tags.includes('leech');
     if (leech) toast(col.cards.get(card.id)?.suspended ? 'Card is a leech and was suspended' : 'Card is a leech');
@@ -141,16 +160,16 @@ export function Study({ deckId }: { deckId: number }) {
   const runGesture = (g: GestureAction) => {
     switch (g) {
       case 'showAnswer':
-        if (!showAnswer) setShowAnswer(true);
+        if (!showRef.current) setShowAnswer(true);
         return;
       case 'again':
-        return showAnswer ? answer(1) : setShowAnswer(true);
+        return showRef.current ? answer(1) : setShowAnswer(true);
       case 'hard':
-        return showAnswer ? answer(2) : setShowAnswer(true);
+        return showRef.current ? answer(2) : setShowAnswer(true);
       case 'good':
-        return showAnswer ? answer(3) : setShowAnswer(true);
+        return showRef.current ? answer(3) : setShowAnswer(true);
       case 'easy':
-        return showAnswer ? answer(4) : setShowAnswer(true);
+        return showRef.current ? answer(4) : setShowAnswer(true);
       case 'undo':
         return undo();
       case 'bury':
@@ -190,10 +209,10 @@ export function Study({ deckId }: { deckId: number }) {
       if (k === ' ' || k === 'Enter') {
         e.preventDefault();
         if (!card) return;
-        return showAnswer ? answer(3) : setShowAnswer(true);
+        return showRef.current ? answer(3) : setShowAnswer(true);
       }
       if (/^[1-4]$/.test(k)) {
-        if (showAnswer) answer(Number(k) as Rating);
+        if (showRef.current) answer(Number(k) as Rating);
         return;
       }
       switch (k) {
@@ -268,7 +287,7 @@ export function Study({ deckId }: { deckId: number }) {
     const rect = area.getBoundingClientRect();
     const third = (e.clientX - rect.left) / rect.width;
     const zone = third < 1 / 3 ? 'left' : third > 2 / 3 ? 'right' : 'center';
-    runGesture((showAnswer ? col.settings.tapAnswer : col.settings.tapQuestion)[zone]);
+    runGesture((showRef.current ? col.settings.tapAnswer : col.settings.tapQuestion)[zone]);
   };
 
   const menu = () =>
