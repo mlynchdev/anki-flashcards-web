@@ -690,7 +690,12 @@ export class Collection {
       reviews = reviews.concat(g.reviews);
       learn = learn.concat(g.learn);
     }
-    if (!deck.dyn) reviews.sort((a, b) => a.due - b.due || hash(a.id) - hash(b.id));
+    if (!deck.dyn) {
+      // Shuffles are keyed by card id and day, so the order is stable within a day.
+      if (conf.newGather === 'random') news.sort((a, b) => hash(a.id) - hash(b.id));
+      if (conf.reviewSort === 'random') reviews.sort((a, b) => hash(a.id) - hash(b.id));
+      else reviews.sort((a, b) => a.due - b.due || hash(a.id) - hash(b.id));
+    }
     learn.sort((a, b) => a.due - b.due);
 
     if (!deck.dyn) {

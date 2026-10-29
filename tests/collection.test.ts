@@ -158,3 +158,77 @@ describe('siblings, undo, leeches, filtered decks', () => {
     expect(col.notes.get(note.id)!.tags).toContain('subject::sub');
   });
 });
+
+describe('gathering across subdecks', () => {
+  async function sections() {
+    const col = new Collection(new MemoryPersistence());
+    let now = T0;
+    col.clock = () => now;
+    await col.load();
+    const decks = ['SD::A', 'SD::B', 'SD::C'].map((n) => col.getOrCreateDeck(n));
+    for (const d of decks) for (let i = 0; i < 10; i++) col.addNote(NT_BASIC, [`${d.name} q${i}`, 'a'], [], d.id);
+    const top = col.deckByName('SD')!;
+    return { col, decks, top, advance: (ms: number) => (now += ms) };
+  }
+
+  /** Deck ids of the next `n` cards, answering each with Easy. */
+  function studyOrder(col: Collection, deckId: number, n: number): number[] {
+    const s = col.startSession(deckId);
+    const out: number[] = [];
+    for (let i = 0; i < n; i++) {
+      const next = col.nextCard(s);
+      if (next.kind !== 'card') break;
+      out.push(next.card.deckId);
+      col.answer(next.card.id, 4, 1000, s);
+    }
+    return out;
+  }
+
+  it('by default takes new cards one subdeck at a time', async () => {
+    const { col, decks, top } = await sections();
+    const order = studyOrder(col, top.id, 20);
+    expect(order).toEqual([...Array(10).fill(decks[0].id), ...Array(10).fill(decks[1].id)]);
+  });
+
+  it('"Random cards" interleaves new cards from all subdecks', async () => {
+    const { col, decks, top } = await sections();
+    col.saveConfig({ ...col.configFor(top.id), newGather: 'random' });
+    const order = studyOrder(col, top.id, 20);
+    expect(order).toHaveLength(20);
+    // All three sections show up within the first ten cards, and the order switches sections often.
+    expect(new Set(order.slice(0, 10)).size).toBe(3);
+    const switches = order.filter((d, i) => i > 0 && d !== order[i - 1]).length;
+    expect(switches).toBeGreaterThan(6);
+    expect(new Set(order).size).toBe(decks.length);
+  });
+
+  it('the shuffle is stable within a day', async () => {
+    const { col, top } = await sections();
+    col.saveConfig({ ...col.configFor(top.id), newGather: 'random' });
+    const first = () => {
+      const n = col.nextCard(col.startSession(top.id));
+      return n.kind === 'card' ? n.card.id : 0;
+    };
+    expect(first()).toBe(first());
+  });
+
+  it('"Random" review sort mixes due reviews across subdecks', async () => {
+    const { col, decks, top } = await sections();
+    // Every card is a due review; subdeck A's are the most overdue, then B, then C.
+    const makeReviews = () =>
+      col.bulk('setup', (api) => {
+        for (const c of [...col.cards.values()]) {
+          const overdue = c.deckId === decks[0].id ? 30 : c.deckId === decks[1].id ? 20 : 10;
+          api.putCard({ ...c, state: CardState.Review, ivl: 5, ease: 2.5, due: col.today - overdue });
+        }
+      });
+    col.saveConfig({ ...col.configFor(top.id), revPerDay: 100 });
+
+    makeReviews();
+    expect(new Set(studyOrder(col, top.id, 10))).toEqual(new Set([decks[0].id]));
+
+    makeReviews();
+    col.saveConfig({ ...col.configFor(top.id), reviewSort: 'random' });
+    expect(new Set(studyOrder(col, top.id, 10)).size).toBe(3);
+  });
+});

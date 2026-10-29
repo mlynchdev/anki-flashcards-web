@@ -278,6 +278,8 @@ export const DEFAULT_CONFIG: Omit<DeckConfig, 'id' | 'name' | 'mod'> = {
   buryReview: false,
   buryInterday: false,
   newOrder: 'due',
+  newGather: 'deck',
+  reviewSort: 'due',
   newMix: 'mix',
   desiredRetention: 0.9,
   fsrsParams: [],

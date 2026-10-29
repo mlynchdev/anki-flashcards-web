@@ -66,6 +66,10 @@ ships with the app or the repository.
 
 **Decks**
 - Option presets shared between decks: clone, rename, remove, apply to subdecks.
+- Study a parent deck as one shuffled pool. In the parent's options, set "New card gather order"
+  to "Random cards" and "Review sort order" to "Random (across subdecks)". New cards and
+  reviews from every subdeck are then mixed instead of arriving one section at a time. The
+  shuffle stays stable for the day, and each subdeck's daily limits still apply.
 - Filtered decks with any search, a limit, an order (random, due, added, interval, lapses,
   lowest retrievability), and rescheduling on or off (off is preview mode). Rebuild and empty.
 - Custom Study: extra new cards, extra reviews, forgotten cards, review ahead, preview new

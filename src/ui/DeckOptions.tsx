@@ -149,6 +149,25 @@ export function DeckOptions({ deckId }: { deckId: number }) {
             onChange={(newOrder) => set({ newOrder })}
           />
           <SelectRow
+            label="New card gather order"
+            sub="When studying this deck: take subdecks one at a time, or shuffle all subdecks together"
+            value={conf.newGather ?? 'deck'}
+            options={[
+              { label: 'Deck', value: 'deck' },
+              { label: 'Random cards', value: 'random' },
+            ]}
+            onChange={(newGather) => set({ newGather })}
+          />
+          <SelectRow
+            label="Review sort order"
+            value={conf.reviewSort ?? 'due'}
+            options={[
+              { label: 'Due date', value: 'due' },
+              { label: 'Random (across subdecks)', value: 'random' },
+            ]}
+            onChange={(reviewSort) => set({ reviewSort })}
+          />
+          <SelectRow
             label="New/review order"
             value={conf.newMix}
             options={[

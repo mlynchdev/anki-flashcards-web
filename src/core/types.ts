@@ -136,6 +136,13 @@ export interface DeckConfig {
   buryReview: boolean;
   buryInterday: boolean;
   newOrder: 'due' | 'random';
+  /**
+   * How new cards from the deck and its subdecks are combined when this deck is studied:
+   * 'deck' takes them subdeck by subdeck, 'random' shuffles the whole pool.
+   */
+  newGather?: 'deck' | 'random';
+  /** Review order when this deck is studied: by due date, or shuffled across subdecks. */
+  reviewSort?: 'due' | 'random';
   newMix: NewMix;
   desiredRetention: number;
   /** FSRS weights; empty means use the defaults. */
