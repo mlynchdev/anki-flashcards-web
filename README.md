@@ -4,6 +4,9 @@ An open-source spaced repetition app that runs entirely in the browser. It is mo
 AnkiMobile: hierarchical decks, the same study flow and rating buttons, Anki search syntax,
 FSRS scheduling. It installs as a PWA on iOS, Android and desktop and works offline.
 
+Live at **https://anki-sd.edgelord.dev**, behind Cloudflare Access. The fallback
+`anki-flashcards-web.mark-cfc.workers.dev` URL serves the same Worker and is also behind Access.
+
 The app works offline from IndexedDB. Deployed on Cloudflare, it adds three things:
 - Deck content is served from a D1 database.
 - Your review history and scheduling state sync through a per-user Durable Object.
@@ -202,10 +205,19 @@ per person. Deck content in D1 is shared.
 To remove someone, delete the address in both places and redeploy. Their Durable Object keeps
 its data until you delete it.
 
+### Custom domain
+
+`wrangler.jsonc` serves the Worker on `anki-sd.edgelord.dev` as a Workers Custom Domain
+(`"routes": [{ "pattern": "anki-sd.edgelord.dev", "custom_domain": true }]`). The zone must be
+on the same Cloudflare account. `wrangler deploy` creates the DNS record and certificate for that
+one hostname and doesn't touch the zone's other records. Access is enabled for all of the
+Worker's traffic, so the custom domain uses the same application and AUD tag. To confirm, check
+that the `kid` in the login redirect equals `POLICY_AUD`.
+
 Check that unauthenticated requests are rejected:
 
 ```bash
-curl -s -o /dev/null -w "%{http_code}\n" https://anki-flashcards-web.<subdomain>.workers.dev/api/content   # 302 (Access) or 403 (Worker)
+curl -s -o /dev/null -w "%{http_code}\n" https://anki-sd.edgelord.dev/api/content   # 302 (Access) or 403 (Worker)
 ```
 
 Local development of the Worker uses `wrangler dev` with a local D1 and Durable Object. Put
